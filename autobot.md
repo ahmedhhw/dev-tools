@@ -28,6 +28,7 @@ If no argument is given, ask for a feature description or ADO work item URL/ID b
 ## Conventions (apply everywhere)
 
 - **Reuse before building.** Prefer extending existing code over writing things from scratch. Before designing any feature, search the codebase for a system that already does something similar — then either extend it, or make it more reusable by extracting the shared behaviour into a common utility/class and using it from both the old and new call sites. Only write something new when no existing system can reasonably be adapted. Call out in the design which existing systems you are reusing or refactoring, and why a new component is justified when you do introduce one.
+- **Prefer graphify over manual searching, everywhere.** Whenever autobot needs to understand the codebase — surveying existing systems, locating a file/function/class to link, checking whether something already exists, tracing how components relate — check for the `graphify` skill/tool first. If it is available (or `graphify-out/` exists in the repo), query it before falling back to grep/glob/manual file reads or re-inspecting the repo from scratch. Only fall back to manual search if graphify is unavailable or its answer is insufficient. This applies to every stage and every subagent spawned — pass the instruction to prefer graphify down into spawn prompts (Stage 1 survey, Reviewed-mode plan authoring, implementation) so subagents don't default to blind repo re-inspection.
 - **ALWAYS LINK EXISTING REPO REFERENCES — NO EXCEPTIONS.** Any time you name an existing file, function, class, or method — in prose, scope bullets, or file lists — you MUST link it with markdown relative to the autobot document's own location. Example: instead of `TodoViewModel.swift`, write `[TodoViewModel.swift](../TimeControl/ViewModels/TodoViewModel.swift)`. New files that do not yet exist: name their intended path only, do not link. **Before outputting any section, scan it and verify every existing reference is linked.**
 - **Strict TDD.** Never write production code before a failing test exists for it.
 - **Test names describe behaviour.** Plain readable English — no `phase`, `iter`, `iteration`, or numbers from the plan in test or file names.
@@ -253,7 +254,7 @@ If multiple `autobot-*.md` exist, list them and ask which to resume. Tell the us
 
 ### Survey existing code first
 
-Before drawing any mock or writing any pseudocode, search the codebase for systems that already do something close to what this feature needs (similar UI components, services, data flows, utilities). Note what you find — you will design to **extend or generalize** these rather than build parallel implementations. See the **Reuse before building** convention. Surface the candidates you intend to reuse to the user as part of the design.
+Before drawing any mock or writing any pseudocode, search the codebase for systems that already do something close to what this feature needs (similar UI components, services, data flows, utilities). **Use graphify for this survey if it's available** (see the **Prefer graphify** convention) rather than grepping/reading files cold. Note what you find — you will design to **extend or generalize** these rather than build parallel implementations. See the **Reuse before building** convention. Surface the candidates you intend to reuse to the user as part of the design.
 
 ---
 
@@ -451,7 +452,7 @@ Read <path-to-ctx-iter-N.md> for full iteration context. Author a Reviewed-mode 
 ```
 **Done when:** Observable acceptance criteria.
 
-Rules: strict TDD (a failing test must exist before its production code); test names are plain behavioural English with no phase/iteration numbers; high-level pseudocode is NOT enough here — write complete, reviewable test and production code. Prefer reusing or extending existing code over new implementations — where the context names an existing system to extend or a utility to extract, build on it rather than duplicating. Before finishing, scan every file/function/class reference and confirm each existing one is linked relative to the plan file's location. Do not implement anything or run tests — only write the plan file. When done, report back: the plan file path and the list of phases with their names.
+Rules: strict TDD (a failing test must exist before its production code); test names are plain behavioural English with no phase/iteration numbers; high-level pseudocode is NOT enough here — write complete, reviewable test and production code. Prefer reusing or extending existing code over new implementations — where the context names an existing system to extend or a utility to extract, build on it rather than duplicating. If the graphify skill/tool or a graphify-out/ directory is available in this repo, use it first to locate or verify existing systems/files/relationships instead of grepping or re-inspecting the repo from scratch. Before finishing, scan every file/function/class reference and confirm each existing one is linked relative to the plan file's location. Do not implement anything or run tests — only write the plan file. When done, report back: the plan file path and the list of phases with their names.
 ```
 
 Do not include any other context in the spawn prompt — the context file is sufficient.
@@ -472,7 +473,7 @@ On **Cursor, VS Code, and GitHub Copilot**, implement inline yourself using the 
 
 The subagent prompt is:
 ```
-Read <path-to-ctx-iter-N.md> for iteration context. Then read <path-to-plan-iter-N.md> for the full phase plan. Implement every phase in order — for each phase: write the tests (Red), make them pass (Green), refactor if needed, then move to the next phase. Run only the affected test files after each green. When all phases are done, report back: every test written per phase and its final pass/fail status.
+Read <path-to-ctx-iter-N.md> for iteration context. Then read <path-to-plan-iter-N.md> for the full phase plan. Implement every phase in order — for each phase: write the tests (Red), make them pass (Green), refactor if needed, then move to the next phase. If the graphify skill/tool or a graphify-out/ directory is available in this repo, prefer it over grepping/re-inspecting the repo when you need to locate or verify existing code. Run only the affected test files after each green. When all phases are done, report back: every test written per phase and its final pass/fail status.
 ```
 
 Do not include any other context in the spawn prompt — the context file + plan file are sufficient.
@@ -490,7 +491,7 @@ When the subagent returns, append its results to the ledger in the autobot doc:
 Agent(
   description: "Implement Phase N.M — <phase name>",
   model: "sonnet",
-  prompt: "Read <path-to-ctx-iter-N.md> for iteration context. Then read Phase N.M in <path-to-plan-iter-N.md>. Implement that phase only — write the tests (Red), make them pass (Green), refactor if needed. Run only this phase's test file (plus test files for any modules touched) after each step. When done, report back: every test written and its final pass/fail status."
+  prompt: "Read <path-to-ctx-iter-N.md> for iteration context. Then read Phase N.M in <path-to-plan-iter-N.md>. Implement that phase only — write the tests (Red), make them pass (Green), refactor if needed. If the graphify skill/tool or a graphify-out/ directory is available in this repo, prefer it over grepping/re-inspecting the repo when you need to locate or verify existing code. Run only this phase's test file (plus test files for any modules touched) after each step. When done, report back: every test written and its final pass/fail status."
 )
 ```
 On **Cursor, VS Code, and GitHub Copilot**, implement the named phase inline yourself using that same prompt as your own instructions. After each phase is done (subagent or inline), append to the ledger and wait for the user to name the next phase.
@@ -513,7 +514,7 @@ On **Cursor, VS Code, and GitHub Copilot**, implement inline yourself using the 
 
 The subagent prompt is:
 ```
-Read <path-to-ctx-iter-N.md> for full context. TDD the iteration described there — strict red/green/refactor, one test at a time. Prefer reusing or extending existing code over new implementations — where the context names an existing system to extend or a utility to extract, build on it rather than duplicating. Run only this iteration's tests (plus any test files for modules you touch) after each green. When all tests pass, report back a one-line summary of every test written and its final status.
+Read <path-to-ctx-iter-N.md> for full context. TDD the iteration described there — strict red/green/refactor, one test at a time. Prefer reusing or extending existing code over new implementations — where the context names an existing system to extend or a utility to extract, build on it rather than duplicating. If the graphify skill/tool or a graphify-out/ directory is available in this repo, prefer it over grepping/re-inspecting the repo when you need to locate or verify existing code. Run only this iteration's tests (plus any test files for modules you touch) after each green. When all tests pass, report back a one-line summary of every test written and its final status.
 ```
 
 Do not include any other context in the spawn prompt — the context file is sufficient.
