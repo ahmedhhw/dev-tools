@@ -1,11 +1,44 @@
 import argparse
+import json
 import logging
 import os
+import socket
 import sys
 import threading
 from pathlib import Path
 
 log = logging.getLogger(__name__)
+
+
+def socket_path() -> Path:
+    return Path.home() / ".config" / "worktree-manager" / "worktree-manager.sock"
+
+
+def instance_is_running(sock_path: Path) -> bool:
+    if not sock_path.exists():
+        return False
+    try:
+        conn = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+        conn.connect(str(sock_path))
+        conn.close()
+        return True
+    except ConnectionRefusedError:
+        sock_path.unlink()
+        return False
+
+
+def try_send_command(sock_path: Path, payload: dict) -> dict | None:
+    try:
+        conn = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+        conn.connect(str(sock_path))
+    except (FileNotFoundError, ConnectionRefusedError):
+        return None
+    f = conn.makefile("rw", encoding="utf-8")
+    f.write(json.dumps(payload) + "\n")
+    f.flush()
+    line = f.readline()
+    conn.close()
+    return json.loads(line)
 _pkg_root = str(Path(__file__).resolve().parent.parent)
 if _pkg_root not in sys.path:
     sys.path.insert(0,_pkg_root)
@@ -20,6 +53,7 @@ from worktree_manager.github_vm import GitHubViewModel
 from worktree_manager.command_center_vm import CommandCenterViewModel
 from worktree_manager.config_store import ConfigStore
 from worktree_manager.git_service import GitService
+from worktree_manager.ipc_server import IpcServer
 from worktree_manager.setup_settings_vm import RepoSetupViewModel, SettingsViewModel
 from worktree_manager.workspace_projects_vm import WorkspaceProjectsViewModel
 from worktree_manager.workspace_service import WorkspaceService
@@ -45,11 +79,33 @@ class _FinishedBridge(QObject):
     startup_detected = Signal(str, object)
 
 
+_SUBCOMMANDS = {"diff"}
+
+
 def parse_args(argv):
-    parser = argparse.ArgumentParser(description="Git Worktree Manager")
-    parser.add_argument("repo_path", nargs="?", default=None,
-                        help="Path to the main git worktree")
-    return parser.parse_args(argv)
+    # If the first non-flag argument is a known subcommand, route to subparser.
+    # Otherwise treat it as the legacy repo_path positional.
+    first_positional = next((a for a in argv if not a.startswith("-")), None)
+    if first_positional in _SUBCOMMANDS:
+        # subcommand path
+        parser = argparse.ArgumentParser(description="Git Worktree Manager")
+        subparsers = parser.add_subparsers(dest="command")
+        diff_parser = subparsers.add_parser("diff", help="Show diff panel for the current worktree")
+        diff_parser.add_argument("--from", dest="from_ref", default=None,
+                                 help="From ref for diff")
+        diff_parser.add_argument("--to", dest="to_ref", default=None,
+                                 help="To ref for diff")
+        ns = parser.parse_args(argv)
+        ns.repo_path = None
+        return ns
+    else:
+        # bare-launch path (legacy)
+        parser = argparse.ArgumentParser(description="Git Worktree Manager")
+        parser.add_argument("repo_path", nargs="?", default=None,
+                            help="Path to the main git worktree")
+        ns = parser.parse_args(argv)
+        ns.command = None
+        return ns
 
 
 def resolve_repo_path(path, git):
@@ -76,6 +132,9 @@ class App(QMainWindow):
         self._finished_bridge = _FinishedBridge()
         self._finished_bridge.command_finished.connect(self._on_command_finished)
         self._finished_bridge.startup_detected.connect(self._on_startup_detected)
+
+        self._ipc_server = IpcServer()
+        self._ipc_server.command_received.connect(self._handle_ipc_command)
 
         self._wt_mgmt_vm = WorktreeMgmtViewModel(
             config_store=self._store, git_service=self._git,
@@ -834,6 +893,63 @@ class App(QMainWindow):
         panel = self._panel_cache["diff"]
         panel.show_for_repo(repo_path)
 
+    # ── IPC / single-instance ────────────────────────────────────────────────
+
+    def raise_and_activate(self) -> None:
+        self.show()
+        self.raise_()
+        self.activateWindow()
+
+    def _handle_ipc_command(self, request: dict, conn) -> None:
+        action = request.get("action")
+        if action == "focus":
+            self.raise_and_activate()
+            reply = {"ok": True}
+        elif action == "diff":
+            reply = self._handle_diff_command(request)
+        else:
+            reply = {"ok": False, "error": f"unknown action {action!r}"}
+        try:
+            f = conn.makefile("w", encoding="utf-8")
+            f.write(json.dumps(reply) + "\n")
+            f.flush()
+        except Exception:
+            pass
+        finally:
+            conn.close()
+
+    def _handle_diff_command(self, request: dict) -> dict:
+        cwd = request.get("cwd", "")
+        from_ref = request.get("from_ref")
+        to_ref = request.get("to_ref")
+        toplevel = self._git.toplevel_for(cwd)
+        if toplevel is None:
+            return {"ok": False, "error": "not inside a git repository"}
+        repo_path = self._find_tracked_repo_for_toplevel(toplevel)
+        if repo_path is None:
+            return {"ok": False, "error": "cwd is not part of any tracked repo"}
+        worktrees = self._git.list_worktrees(repo_path)
+        worktree = next((w for w in worktrees if w.path == toplevel), None)
+        if worktree is None:
+            return {"ok": False, "error": "cwd's worktree is not tracked"}
+        self.raise_and_activate()
+        self._show_diff()
+        if from_ref or to_ref:
+            self._panel_cache["diff"].show_diff(
+                repo_path, worktree_path=worktree.path,
+                from_ref=from_ref, to_ref=to_ref,
+            )
+        else:
+            self._diff_from_working_tree(worktree.path)
+        return {"ok": True}
+
+    def _find_tracked_repo_for_toplevel(self, toplevel: str) -> str | None:
+        for repo in self._store.all_repos():
+            for wt in self._git.list_worktrees(repo):
+                if wt.path == toplevel:
+                    return repo
+        return None
+
     def _handle_settings(self):
         repo_path = self._active_repo_path or next(iter(self._store.all_repos()), None)
         if repo_path is None:
@@ -1058,12 +1174,35 @@ def main():
         format="%(asctime)s %(name)s %(levelname)s %(message)s",
     )
     args = parse_args(sys.argv[1:])
+    sock_path = socket_path()
+
+    if args.command == "diff":
+        reply = try_send_command(sock_path, {
+            "action": "diff",
+            "cwd": os.getcwd(),
+            "from_ref": args.from_ref,
+            "to_ref": args.to_ref,
+        })
+        if reply is None:
+            print("No running instance. Launch worktree-manager first.", file=sys.stderr)
+            sys.exit(1)
+        if not reply.get("ok"):
+            print(f"Error: {reply.get('error')}", file=sys.stderr)
+            sys.exit(1)
+        return
+
+    # bare launch — single-instance check before QApplication
+    if instance_is_running(sock_path):
+        try_send_command(sock_path, {"action": "focus"})
+        return
+
     git = GitService()
     repo_path = resolve_repo_path(args.repo_path, git)
 
     qt_app = QApplication.instance() or QApplication(sys.argv)
     force_light_mode(qt_app)
     window = App(repo_path=repo_path)
+    window._ipc_server.start(str(sock_path))
     window.show()
     sys.exit(qt_app.exec())
 

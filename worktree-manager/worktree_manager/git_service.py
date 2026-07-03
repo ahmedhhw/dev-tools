@@ -42,6 +42,12 @@ class GitService:
     def is_valid_repo(self, path: str) -> bool:
         return os.path.isdir(os.path.join(path, ".git"))
 
+    def toplevel_for(self, cwd: str) -> str | None:
+        try:
+            return self._run(["git", "rev-parse", "--show-toplevel"], cwd=cwd).strip()
+        except subprocess.CalledProcessError:
+            return None
+
     def last_commit_ts(self, repo_path: str, branch: str) -> int:
         try:
             out = self._run(
