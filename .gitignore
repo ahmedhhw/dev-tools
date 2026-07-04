@@ -38,3 +38,6 @@ coverage.xml
 .idea/
 *.swp
 *.swo
+
+# graphify
+graphify-out/

@@ -48,6 +48,17 @@ class GitService:
         except subprocess.CalledProcessError:
             return None
 
+    def ref_exists(self, repo_path: str, ref: str) -> bool:
+        """True if git can resolve ``ref`` to a commit in ``repo_path``."""
+        try:
+            self._run(
+                ["git", "rev-parse", "--verify", "--quiet", f"{ref}^{{commit}}"],
+                cwd=repo_path,
+            )
+            return True
+        except subprocess.CalledProcessError:
+            return False
+
     def last_commit_ts(self, repo_path: str, branch: str) -> int:
         try:
             out = self._run(

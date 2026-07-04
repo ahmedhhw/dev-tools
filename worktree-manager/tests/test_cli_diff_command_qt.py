@@ -114,6 +114,145 @@ def test_handle_diff_resolves_and_calls_diff_from_working_tree(app, mock_git, mo
     mock_diff_wt.assert_called_once_with(worktree_path)
 
 
+# ── handle_diff: explicit refs (Iteration 1) ──────────────────────────────────
+
+def test_diff_with_from_ref_only_forwards_from_and_leaves_to_default(app, mock_git, mock_store):
+    """diff --from main forwards from_ref=main and to_ref=None to the diff panel,
+    so the 'to' side keeps its worktree default."""
+    worktree_path = "/myrepo"
+    mock_git.toplevel_for.return_value = worktree_path
+    wt = MagicMock(spec=WorktreeModel)
+    wt.path = worktree_path
+    mock_git.list_worktrees.return_value = [wt]
+    mock_store.all_repos.return_value = {"/myrepo": MagicMock()}
+    mock_git.ref_exists.return_value = True
+
+    diff_panel = MagicMock()
+    app._panel_cache["diff"] = diff_panel
+
+    with patch.object(app, "raise_and_activate"), \
+         patch.object(app, "_show_diff"), \
+         patch.object(app, "_diff_from_working_tree") as mock_diff_wt:
+        request = {"action": "diff", "cwd": "/myrepo/subdir",
+                   "from_ref": "main", "to_ref": None}
+        reply = app._handle_diff_command(request)
+
+    assert reply["ok"] is True
+    mock_diff_wt.assert_not_called()
+    diff_panel.show_diff.assert_called_once_with(
+        "/myrepo", worktree_path=worktree_path, from_ref="main", to_ref=None,
+    )
+
+
+def test_diff_with_to_ref_only_forwards_to_and_leaves_from_default(app, mock_git, mock_store):
+    """diff --to HEAD~3 forwards to_ref=HEAD~3 and from_ref=None to the diff panel,
+    so the 'from' side keeps its inferred parent-branch default."""
+    worktree_path = "/myrepo"
+    mock_git.toplevel_for.return_value = worktree_path
+    wt = MagicMock(spec=WorktreeModel)
+    wt.path = worktree_path
+    mock_git.list_worktrees.return_value = [wt]
+    mock_store.all_repos.return_value = {"/myrepo": MagicMock()}
+    mock_git.ref_exists.return_value = True
+
+    diff_panel = MagicMock()
+    app._panel_cache["diff"] = diff_panel
+
+    with patch.object(app, "raise_and_activate"), \
+         patch.object(app, "_show_diff"), \
+         patch.object(app, "_diff_from_working_tree") as mock_diff_wt:
+        request = {"action": "diff", "cwd": "/myrepo/subdir",
+                   "from_ref": None, "to_ref": "HEAD~3"}
+        reply = app._handle_diff_command(request)
+
+    assert reply["ok"] is True
+    mock_diff_wt.assert_not_called()
+    diff_panel.show_diff.assert_called_once_with(
+        "/myrepo", worktree_path=worktree_path, from_ref=None, to_ref="HEAD~3",
+    )
+
+
+def test_diff_with_both_refs_forwards_both_exactly(app, mock_git, mock_store):
+    """diff --from main --to HEAD~3 forwards exactly those two refs to the diff
+    panel with no inferred defaults substituted."""
+    worktree_path = "/myrepo"
+    mock_git.toplevel_for.return_value = worktree_path
+    wt = MagicMock(spec=WorktreeModel)
+    wt.path = worktree_path
+    mock_git.list_worktrees.return_value = [wt]
+    mock_store.all_repos.return_value = {"/myrepo": MagicMock()}
+    mock_git.ref_exists.return_value = True
+
+    diff_panel = MagicMock()
+    app._panel_cache["diff"] = diff_panel
+
+    with patch.object(app, "raise_and_activate"), \
+         patch.object(app, "_show_diff"), \
+         patch.object(app, "_diff_from_working_tree") as mock_diff_wt:
+        request = {"action": "diff", "cwd": "/myrepo/subdir",
+                   "from_ref": "main", "to_ref": "HEAD~3"}
+        reply = app._handle_diff_command(request)
+
+    assert reply["ok"] is True
+    mock_diff_wt.assert_not_called()
+    diff_panel.show_diff.assert_called_once_with(
+        "/myrepo", worktree_path=worktree_path, from_ref="main", to_ref="HEAD~3",
+    )
+
+
+def test_diff_with_unresolvable_ref_returns_error_reply(app, mock_git, mock_store):
+    """An explicit --from/--to ref git cannot resolve surfaces as an error reply
+    instead of a silent no-op, and the diff panel is not driven."""
+    worktree_path = "/myrepo"
+    mock_git.toplevel_for.return_value = worktree_path
+    wt = MagicMock(spec=WorktreeModel)
+    wt.path = worktree_path
+    mock_git.list_worktrees.return_value = [wt]
+    mock_store.all_repos.return_value = {"/myrepo": MagicMock()}
+    mock_git.ref_exists.return_value = False  # git can't resolve the ref
+
+    diff_panel = MagicMock()
+    app._panel_cache["diff"] = diff_panel
+
+    with patch.object(app, "raise_and_activate"), \
+         patch.object(app, "_show_diff"), \
+         patch.object(app, "_diff_from_working_tree") as mock_diff_wt:
+        request = {"action": "diff", "cwd": "/myrepo/subdir",
+                   "from_ref": "no-such-ref", "to_ref": None}
+        reply = app._handle_diff_command(request)
+
+    assert reply["ok"] is False
+    assert "no-such-ref" in reply["error"]
+    diff_panel.show_diff.assert_not_called()
+    mock_diff_wt.assert_not_called()
+
+
+def test_diff_with_no_flags_still_uses_working_tree_default(app, mock_git, mock_store):
+    """diff with no --from/--to still routes to _diff_from_working_tree and never
+    calls show_diff with explicit refs, and ref_exists is not consulted."""
+    worktree_path = "/myrepo"
+    mock_git.toplevel_for.return_value = worktree_path
+    wt = MagicMock(spec=WorktreeModel)
+    wt.path = worktree_path
+    mock_git.list_worktrees.return_value = [wt]
+    mock_store.all_repos.return_value = {"/myrepo": MagicMock()}
+
+    diff_panel = MagicMock()
+    app._panel_cache["diff"] = diff_panel
+
+    with patch.object(app, "raise_and_activate"), \
+         patch.object(app, "_show_diff"), \
+         patch.object(app, "_diff_from_working_tree") as mock_diff_wt:
+        request = {"action": "diff", "cwd": "/myrepo/subdir",
+                   "from_ref": None, "to_ref": None}
+        reply = app._handle_diff_command(request)
+
+    assert reply["ok"] is True
+    mock_diff_wt.assert_called_once_with(worktree_path)
+    diff_panel.show_diff.assert_not_called()
+    mock_git.ref_exists.assert_not_called()
+
+
 # ── diff CLI: no running instance ─────────────────────────────────────────────
 
 def test_diff_cli_no_running_instance_prints_error_and_exits(capsys):

@@ -932,6 +932,9 @@ class App(QMainWindow):
         worktree = next((w for w in worktrees if w.path == toplevel), None)
         if worktree is None:
             return {"ok": False, "error": "cwd's worktree is not tracked"}
+        for ref in (from_ref, to_ref):
+            if ref and not self._git.ref_exists(repo_path, ref):
+                return {"ok": False, "error": f"cannot resolve ref {ref!r}"}
         self.raise_and_activate()
         self._show_diff()
         if from_ref or to_ref:
